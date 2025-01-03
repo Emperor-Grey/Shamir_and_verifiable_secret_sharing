@@ -1,6 +1,9 @@
 use std::vec;
 
+use num_bigint::BigInt;
 use rand::prelude::*;
+
+use crate::vss::{VSSCommitments, VSSParams};
 
 #[derive(Debug, Clone)]
 pub struct SharmirModel {
@@ -8,6 +11,9 @@ pub struct SharmirModel {
     shares: usize,
     threshold: usize,
     generated_shares: Vec<(i64, i64)>,
+    coefficients: Vec<i64>,
+    vss_commitments: Option<VSSCommitments>,
+    vss_params: VSSParams,
 }
 
 impl SharmirModel {
@@ -17,24 +23,40 @@ impl SharmirModel {
             shares,
             threshold,
             generated_shares: vec![],
+            coefficients: vec![],
+            vss_commitments: None,
+            vss_params: VSSParams::new(),
         }
     }
-    // This method should:
-    // 1. Generate random coefficients using rand::Rng for polynomial of degree threshold-1
-    // 2. Calculate: secret + a1*x + a2*x^2 + ... + a(k-1)*x^(k-1)
-    // 3. Each coefficient should be random number between 1 and secret/2
-    // 4. Use a loop or iterator to calculate powers and multiply with coefficients
-    // 5. Return the final sum as i64
+
     pub fn construct_polynomial(&mut self, x: i64) -> i64 {
         let mut rng = rand::thread_rng();
         let mut sum = self.secret;
 
-        for i in 1..self.threshold {
-            let coefficient = rng.gen_range(1..=self.secret / 2);
-            sum += coefficient * x.pow(i as u32);
+        // Store coefficients for VSS if not already generated
+        if self.coefficients.is_empty() {
+            self.coefficients = vec![self.secret];
+            for _ in 1..self.threshold {
+                let coefficient = rng.gen_range(1..=self.secret / 2);
+                self.coefficients.push(coefficient);
+            }
+            // Generate VSS commitments
+            self.vss_commitments = Some(VSSCommitments::new(&self.coefficients, &self.vss_params));
+        }
+
+        for (power, &coeff) in self.coefficients[1..].iter().enumerate() {
+            sum += coeff * x.pow((power + 1) as u32);
         }
 
         sum
+    }
+
+    pub fn verify_share(&self, x: i64, share: i64) -> bool {
+        if let Some(commitments) = &self.vss_commitments {
+            commitments.verify_share(x, share, &self.vss_params)
+        } else {
+            false
+        }
     }
 
     // Simply return a reference to generated_shares
@@ -53,12 +75,13 @@ impl SharmirModel {
     // Note: Need &mut self since we're modifying state
     pub fn generate_shares(&mut self) {
         let mut new_shares: Vec<(i64, i64)> = vec![];
+
         for i in 0..self.shares {
             let x = i as i64;
             let y = self.construct_polynomial(x);
             new_shares.push((x, y));
         }
-        self.generated_shares = new_shares
+        self.generated_shares = new_shares;
     }
 
     // - Steps:
